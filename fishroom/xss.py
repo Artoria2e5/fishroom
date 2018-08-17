@@ -16,11 +16,11 @@ def md_escape(text):
         [r'_', r'\\_'],
         [r'`', r'\\`'],
     ]
-    return replace(text,replacements)
+    return replace(text, replacements)
 
 def replace(text,rs):
     for r in rs:
-        text = re.sub(r[0],r[1],text)
+        text = re.sub(r[0], r[1], text)
     return text
 
 def cooked_unescape(message):

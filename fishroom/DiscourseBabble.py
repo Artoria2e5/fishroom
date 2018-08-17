@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+"""
+Support for the Discourse Babble plugin:
+https://github.com/gdpelican/babble
+"""
 import requests
 import requests.exceptions
 import tornado
@@ -17,7 +21,6 @@ from .models import (
 from .textformat import TextFormatter
 from .helpers import get_now_date_time, get_logger
 from .config import config
-from .IRC import IRCHandle
 
 logger = get_logger("DiscourseBabble")
 
@@ -41,19 +44,27 @@ IRC_COLOR_RGB = [
         '#888', # 16
 ]
 
+
 def getWebhookHandler(dbh):
     class WebhookHandler(tornado.web.RequestHandler):
         def post(self):
+            """
+            Process the JSON post object.
+            """
             json = tornado.escape.json_decode(self.request.body)
             post = json.get('post', None)
             if post:
+                # new api
                 topic_id = post.get('id', 0)
                 current_user = post.get('username', '未知用户')
-                message = post.get('cooked', '未知消息')
+                # get bbcode/markdown hybrid:
+                # more consice than html, still allows for image links
+                message = post.get('raw', '未知消息')
                 dbh.on_sendmessage(topic_id, current_user, message)
             else:
-                topic_id = json.get('topic_id',0)
+                topic_id = json.get('topic_id', 0)
                 current_user = json.get('current_user', '未知用户')
+                # what kind of data is this?
                 message = json.get('message', '未知消息')
                 dbh.on_sendmessage(topic_id, current_user, message)
             self.write('Got a message.')
@@ -62,7 +73,6 @@ def getWebhookHandler(dbh):
 class DiscourseBabbleHandle(BaseBotInstance):
     ChanTag = ChannelType.DiscourseBabble
     SupportMultiline = True
-    #rich_message = IRCHandle.rich_message
     send_to_bus = None
     def __init__(self, base_url, username, api_key, topic_ids):
         debug=config['debug']
@@ -73,7 +83,7 @@ class DiscourseBabbleHandle(BaseBotInstance):
         application = tornado.web.Application([
             (r"/sendmessage", getWebhookHandler(self)),
         ],debug=debug, autoreload=debug)
-        application.listen(config['babble']['webhook_port'],address=config['babble'].get('webhook_host', '0.0.0.0'))
+        application.listen(config['babble']['webhook_port'], address=config['babble'].get('webhook_host', '0.0.0.0'))
 
     def listen(self):
         tornado.ioloop.IOLoop.instance().start()
@@ -82,25 +92,18 @@ class DiscourseBabbleHandle(BaseBotInstance):
         if current_user == self.username:
             return
         date, time = get_now_date_time()
-        # images = [m.group(1) for m in re.finditer(r'!\[.*\]\(.+\)',message)]
         logger.debug(message)
-        m = re.search(r'<img[\s\w"=]+?src="([^"]+)".*?>', message)
-        media_url = ''
         mtype = MessageType.Text
-        if m:
-            logger.debug(m)
-            mtype = MessageType.Photo
-            media_url = m.group(1)
-        if re.search(r'^http', media_url)==None:
-            if media_url.startswith('/uploads/'):
-                media_url = self.base_url + media_url
-        logger.debug(media_url)
+        # Replace discourse-relative media with absolute links
+        message = re.sub(r'!\[.*\]\(/uploads/.+\)',
+                         r'![\1](' + self.base_url + r'/uploads/\2)',
+                         message)
         msg = Message(
                 ChannelType.DiscourseBabble,
                 current_user, topic_id,
                 xss.cooked_unescape(message),
-                mtype=mtype,media_url=media_url,
-                date=date,time=time
+                mtype=mtype, media_url='',
+                date=date, time=time
         )
         self.send_to_bus(self,msg)
 
@@ -108,17 +111,18 @@ class DiscourseBabbleHandle(BaseBotInstance):
         if topic_id not in self.topic_ids:
             return
         requests.post(self.base_url
-                +'/babble/topics/'
-                +'%d'%int(topic_id)
-                +'/posts',
+                + '/babble/topics/'
+                + '%d' % int(topic_id)
+                + '/posts',
                 data = {
-                    'api_user':self.username,
-                    'api_key':self.api_key,
+                    'api_user': self.username,
+                    'api_key': self.api_key,
                     'raw': text,
                     'topic_id': '%d'%int(topic_id)
                     })
 
     def send_msg(self, target, content, sender=None, first=False, raw=None, **kwargs):
+        # --- Pick a color from username
         # color that fits both dark and light background
         color_avail = (2, 3, 4, 5, 6, 7, 10, 12, 13)
         color = None
@@ -128,7 +132,7 @@ class DiscourseBabbleHandle(BaseBotInstance):
             # background_num = sum([ord(i) for i in sender]) % 16
             cidx = sum([ord(i) for i in sender]) % len(color_avail)
             foreground_num = color_avail[cidx]
-            color = Color(foreground_num)  # + ',' + str(background_num)
+            color = Color(foreground_num)
 
         reply_quote = ""
         if 'reply_text' in kwargs:
@@ -136,10 +140,11 @@ class DiscourseBabbleHandle(BaseBotInstance):
             reply_text = kwargs['reply_text']
             if len(reply_text) > 8:
                 reply_text = reply_text[:8] + '...'
-            reply_quote = "[b]{reply_to}[/b]<br/>{reply_text}".format(reply_text=reply_text.strip(), reply_to=reply_to)
+            reply_text = reply_text.strip()
+            reply_quote = "[b]{reply_to}[/b]<br/>{reply_text}".format(locals())
 
         channel = raw.channel.capitalize()
-        channel = xss.replace(channel, [[r'[Ii][Rr][Cc]',r'IRC'],['Babble','hitorino']])
+        channel = channel.replace('Babble', config['babble'].get('site_name', 'Discourse'))
         msg = self.rich_message(content, sender=sender, color=color,
                                 reply_quote=reply_quote, channel=channel)
         msg = self.formatRichText(msg)
@@ -152,7 +157,7 @@ class DiscourseBabbleHandle(BaseBotInstance):
     def rich_message(self, content, sender=None, color=None, reply_quote="", channel=""):
         if color and sender:
             return RichText([
-                (TextStyle(color=color,bold=1), "{}".format(sender)),
+                (TextStyle(color=color, bold=1), "{}".format(sender)),
                 (TextStyle(color=Color(16)), " {} 用户\n".format(channel)),
                 (TextStyle(color=Color(16)), "{}\n".format(reply_quote)),
                 (TextStyle(), "{}".format(xss.md_escape(content))),
@@ -171,7 +176,6 @@ class DiscourseBabbleHandle(BaseBotInstance):
             if ts.is_normal():
                 formated_text += text
                 continue
-            ctrl = []
             def bold(text):
                 if not ts.is_bold():
                     return text
@@ -184,35 +188,35 @@ class DiscourseBabbleHandle(BaseBotInstance):
                 if not ts.is_underline():
                     return text
                 return "[u]{}[/u]".format(text)
-            def fgcolor(text,color):
-                return '[color={}]{}[/color]'.format(IRC_COLOR_RGB[color],text)
-            def bgcolor(text,color):
-                return '[bgcolor={}]{}[/bgcolor]'.format(IRC_COLOR_RGB[color],text)
+            def fgcolor(text, color):
+                return '[color={}]{}[/color]'.format(IRC_COLOR_RGB[color], text)
+            def bgcolor(text, color):
+                return '[bgcolor={}]{}[/bgcolor]'.format(IRC_COLOR_RGB[color], text)
             def color(text):
                 if not ts.has_color():
                     return text
                 if ts.color.bg:
-                    return bgcolor(fgcolor(text,ts.color.fg),ts.color.bg)
+                    return bgcolor(fgcolor(text,ts.color.fg), ts.color.bg)
                 else:
                     return fgcolor(text, ts.color.fg)
             formated_text += (underline(italic(bold(color(text)))))
         return formated_text
 
-def Babble2FishroomThread(irc_handle: DiscourseBabbleHandle, bus: MessageBus):
-    if irc_handle is None or isinstance(irc_handle, EmptyBot):
+def Babble2FishroomThread(disbbl_handle: DiscourseBabbleHandle, bus: MessageBus):
+    if disbbl_handle is None or isinstance(disbbl_handle, EmptyBot):
         return
     def send_to_bus(self, msg):
         logger.debug(msg)
         bus.publish(msg)
-    irc_handle.send_to_bus=send_to_bus
-    irc_handle.listen()
+    disbbl_handle.send_to_bus=send_to_bus
+    disbbl_handle.listen()
 
 
-def Fishroom2BabbleThread(irc_handle, bus):
-    if irc_handle is None or isinstance(irc_handle, EmptyBot):
+def Fishroom2BabbleThread(disbbl_handle, bus):
+    if disbbl_handle is None or isinstance(disbbl_handle, EmptyBot):
         return
     for msg in bus.message_stream():
-        irc_handle.forward_msg_from_fishroom(msg)
+        disbbl_handle.forward_msg_from_fishroom(msg)
 
 def init():
     from .db import get_redis
