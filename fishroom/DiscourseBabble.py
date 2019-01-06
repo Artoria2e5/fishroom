@@ -143,8 +143,11 @@ class DiscourseBabbleHandle(BaseBotInstance):
             reply_text = reply_text.strip()
             reply_quote = "[b]{reply_to}[/b]<br/>{reply_text}".format(locals())
 
-        channel = raw.channel.capitalize()
-        channel = channel.replace('Babble', config['babble'].get('site_name', 'Discourse'))
+        try:
+            channel = raw.channel.capitalize()
+            channel = channel.replace('Babble', config['babble'].get('site_name', 'Discourse'))
+        except AttributeError:
+            channel = None
         msg = self.rich_message(content, sender=sender, color=color,
                                 reply_quote=reply_quote, channel=channel)
         msg = self.formatRichText(msg)
