@@ -54,6 +54,14 @@ config = {
     #     "bot_msg_pattern": "^mubot|^!wikipedia",
     # },
 
+    # Uncomment these if you want discourse babble access
+    # "babble": {
+    #     "username": "fishroom",
+    #     "api_key": "",
+    #     "base_url": "https://forum.foo.moe/",
+    #     "webhook_port": 2334
+    # },
+
     # Uncomment these if you want WeChat access
     # "wechat": {},
 
